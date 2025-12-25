@@ -1,0 +1,286 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: astanahub-reports-
+  namespace: argo
+  labels:
+    app: astanahub-reports
+spec:
+  entrypoint: reports-pipeline
+
+  # Параметры запуска
+  arguments:
+    parameters:
+      - name: year
+        value: "2025"
+      - name: report_type
+        value: "quarter2"  # quarter1, quarter2, quarter3, quarter4, yearly
+      - name: trino_host
+        value: "trino:8080"
+      - name: trino_catalog
+        value: "hive"
+      - name: trino_schema
+        value: "astanahub"
+      - name: output_schema
+        value: "reports"
+
+  # Volumes для конфигов и скриптов
+  volumes:
+    - name: spark-scripts
+      configMap:
+        name: spark-scripts
+    - name: sql-queries
+      configMap:
+        name: sql-queries
+
+  templates:
+    # Главный DAG пайплайн
+    - name: reports-pipeline
+      dag:
+        tasks:
+          # 1. Сводная таблица
+          - name: reports-summary
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "reports_summary"
+                - name: output_table
+                  value: "report_summary"
+
+          # 2. Реестр резидентов
+          - name: report-residents
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_residents"
+                - name: output_table
+                  value: "report_residents"
+
+          # 3. Нерезиденты - иностранцы
+          - name: report-nonresidents
+            template: spark-job
+            dependencies: [report-residents]
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_nonresidents"
+                - name: output_table
+                  value: "report_nonresidents"
+                - name: filter_field
+                  value: "has_nonresidents"
+
+          # 4. Нерезиденты - члены семьи
+          - name: report-nonresidents-family
+            template: spark-job
+            dependencies: [report-residents]
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_nonresidents_family"
+                - name: output_table
+                  value: "report_nonresidents_family"
+                - name: filter_field
+                  value: "has_nonresidents_family"
+
+          # 5. Нерезиденты - дистанционно
+          - name: report-nonresidents-outside
+            template: spark-job
+            dependencies: [report-residents]
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_nonresidents_outside"
+                - name: output_table
+                  value: "report_nonresidents_outside"
+                - name: filter_field
+                  value: "has_nonresidents_outside"
+
+          # 6. Вклад в уставной капитал (2.2.1)
+          - name: report-authorized-capital
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_authorized_capital"
+                - name: output_table
+                  value: "report_authorized_capital"
+                - name: filter_field
+                  value: "has_finance_source_increase_authorized_capital_current_founder"
+
+          # 7. Вклад инвестора (2.2.2)
+          - name: report-raised-investors
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_raised_investors"
+                - name: output_table
+                  value: "report_raised_investors"
+                - name: filter_field
+                  value: "has_raised_investors_funds"
+
+          # 8. Займы от КЗ (2.3.1)
+          - name: report-borrowed-funds
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_borrowed_funds"
+                - name: output_table
+                  value: "report_borrowed_funds"
+                - name: filter_field
+                  value: "has_borrowed_funds"
+
+          # 9. Зарубежные займы (2.3.2)
+          - name: report-borrowed-international
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_borrowed_international"
+                - name: output_table
+                  value: "report_borrowed_international"
+                - name: filter_field
+                  value: "has_borrowed_funds_international"
+
+          # 10. Иной способ (2.3.3)
+          - name: report-another-method
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_another_method"
+                - name: output_table
+                  value: "report_another_method"
+                - name: filter_field
+                  value: "has_another_method_investors_funds"
+
+          # 11. Долговые инструменты (2.4.1)
+          - name: report-debt-instruments
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_debt_instruments"
+                - name: output_table
+                  value: "report_debt_instruments"
+                - name: filter_field
+                  value: "has_debt_instruments"
+
+          # 12. Международные продажи - предыдущий квартал (3.3.1)
+          - name: report-income-international-prev
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_income_international_prev"
+                - name: output_table
+                  value: "report_income_international_prev"
+                - name: filter_field
+                  value: "has_income_international_previous_quarter"
+
+          # 13. Международные продажи - текущий квартал (3.3.2)
+          - name: report-income-international-curr
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_income_international_curr"
+                - name: output_table
+                  value: "report_income_international_curr"
+                - name: filter_field
+                  value: "has_income_international_current_quarter"
+
+          # Финальный шаг - уведомление
+          - name: notify-completion
+            template: notify
+            dependencies:
+              - reports-summary
+              - report-residents
+              - report-nonresidents
+              - report-nonresidents-family
+              - report-nonresidents-outside
+              - report-authorized-capital
+              - report-raised-investors
+              - report-borrowed-funds
+              - report-borrowed-international
+              - report-another-method
+              - report-debt-instruments
+              - report-income-international-prev
+              - report-income-international-curr
+
+    # Шаблон Spark Job
+    - name: spark-job
+      inputs:
+        parameters:
+          - name: job_name
+          - name: output_table
+          - name: filter_field
+            default: ""
+      container:
+        image: bitnami/spark:3.5
+        command: ["/opt/bitnami/spark/bin/spark-submit"]
+        args:
+          - "--master"
+          - "k8s://https://kubernetes.default.svc:443"
+          - "--deploy-mode"
+          - "cluster"
+          - "--name"
+          - "{{inputs.parameters.job_name}}"
+          - "--conf"
+          - "spark.kubernetes.container.image=bitnami/spark:3.5"
+          - "--conf"
+          - "spark.kubernetes.namespace=argo"
+          - "--conf"
+          - "spark.driver.memory=4g"
+          - "--conf"
+          - "spark.executor.memory=8g"
+          - "--conf"
+          - "spark.executor.instances=2"
+          - "--conf"
+          - "spark.jars.packages=io.trino:trino-jdbc:435"
+          - "/scripts/process_reports.py"
+          - "--year"
+          - "{{workflow.parameters.year}}"
+          - "--report_type"
+          - "{{workflow.parameters.report_type}}"
+          - "--job_name"
+          - "{{inputs.parameters.job_name}}"
+          - "--output_table"
+          - "{{inputs.parameters.output_table}}"
+          - "--filter_field"
+          - "{{inputs.parameters.filter_field}}"
+          - "--trino_host"
+          - "{{workflow.parameters.trino_host}}"
+          - "--trino_catalog"
+          - "{{workflow.parameters.trino_catalog}}"
+          - "--trino_schema"
+          - "{{workflow.parameters.trino_schema}}"
+          - "--output_schema"
+          - "{{workflow.parameters.output_schema}}"
+        volumeMounts:
+          - name: spark-scripts
+            mountPath: /scripts
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
+
+    # Шаблон уведомления
+    - name: notify
+      container:
+        image: curlimages/curl:latest
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "✅ All reports generated successfully for year {{workflow.parameters.year}}, {{workflow.parameters.report_type}}"
+            echo "Tables created in schema: {{workflow.parameters.output_schema}}"
+            # Опционально: отправка в Telegram/Slack
+            # curl -X POST "https://api.telegram.org/bot<TOKEN>/sendMessage" \
+            #   -d "chat_id=<CHAT_ID>" \
+            #   -d "text=Reports generated for {{workflow.parameters.year}} {{workflow.parameters.report_type}}"

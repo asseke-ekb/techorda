@@ -1,0 +1,359 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: astanahub-reports-quarterly
+  namespace: argo
+spec:
+  # Запуск каждый квартал: 1 января, 1 апреля, 1 июля, 1 октября в 03:00
+  schedule: "0 3 1 1,4,7,10 *"
+  timezone: "Asia/Almaty"
+  concurrencyPolicy: "Forbid"
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 4
+  failedJobsHistoryLimit: 2
+
+  workflowSpec:
+    entrypoint: quarterly-reports
+    arguments:
+      parameters:
+        - name: trino_host
+          value: "trino:8080"
+        - name: trino_catalog
+          value: "hive"
+        - name: trino_schema
+          value: "astanahub"
+        - name: output_schema
+          value: "reports"
+
+    templates:
+      - name: quarterly-reports
+        steps:
+          # Определяем какой квартал обрабатывать
+          - - name: determine-quarter
+              template: get-quarter
+
+          # Запускаем основной DAG
+          - - name: run-reports
+              template: trigger-reports-dag
+              arguments:
+                parameters:
+                  - name: year
+                    value: "{{steps.determine-quarter.outputs.parameters.year}}"
+                  - name: report_type
+                    value: "{{steps.determine-quarter.outputs.parameters.quarter}}"
+
+      - name: get-quarter
+        script:
+          image: python:3.11-alpine
+          command: [python]
+          source: |
+            from datetime import datetime
+            now = datetime.now()
+
+            # Определяем предыдущий квартал
+            month = now.month
+            year = now.year
+
+            if month in [1, 2, 3]:
+                quarter = "quarter4"
+                year = year - 1
+            elif month in [4, 5, 6]:
+                quarter = "quarter1"
+            elif month in [7, 8, 9]:
+                quarter = "quarter2"
+            else:
+                quarter = "quarter3"
+
+            # Записываем результаты в файлы для output parameters
+            with open("/tmp/year.txt", "w") as f:
+                f.write(str(year))
+            with open("/tmp/quarter.txt", "w") as f:
+                f.write(quarter)
+
+            print(f"Processing: {year} {quarter}")
+        outputs:
+          parameters:
+            - name: year
+              valueFrom:
+                path: /tmp/year.txt
+            - name: quarter
+              valueFrom:
+                path: /tmp/quarter.txt
+
+      - name: trigger-reports-dag
+        inputs:
+          parameters:
+            - name: year
+            - name: report_type
+        resource:
+          action: create
+          manifest: |
+            apiVersion: argoproj.io/v1alpha1
+            kind: Workflow
+            metadata:
+              generateName: astanahub-reports-
+              namespace: argo
+            spec:
+              entrypoint: reports-pipeline
+              arguments:
+                parameters:
+                  - name: year
+                    value: "{{inputs.parameters.year}}"
+                  - name: report_type
+                    value: "{{inputs.parameters.report_type}}"
+                  - name: trino_host
+                    value: "{{workflow.parameters.trino_host}}"
+                  - name: trino_catalog
+                    value: "{{workflow.parameters.trino_catalog}}"
+                  - name: trino_schema
+                    value: "{{workflow.parameters.trino_schema}}"
+                  - name: output_schema
+                    value: "{{workflow.parameters.output_schema}}"
+              workflowTemplateRef:
+                name: astanahub-reports-template
+
+---
+# WorkflowTemplate для переиспользования
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: astanahub-reports-template
+  namespace: argo
+spec:
+  entrypoint: reports-pipeline
+  arguments:
+    parameters:
+      - name: year
+      - name: report_type
+      - name: trino_host
+      - name: trino_catalog
+      - name: trino_schema
+      - name: output_schema
+
+  volumes:
+    - name: spark-scripts
+      configMap:
+        name: spark-scripts
+
+  templates:
+    - name: reports-pipeline
+      dag:
+        tasks:
+          - name: reports-summary
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "reports_summary"
+                - name: output_table
+                  value: "report_summary"
+
+          - name: report-residents
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_residents"
+                - name: output_table
+                  value: "report_residents"
+
+          - name: report-nonresidents
+            template: spark-job
+            dependencies: [report-residents]
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_nonresidents"
+                - name: output_table
+                  value: "report_nonresidents"
+                - name: filter_field
+                  value: "has_nonresidents"
+
+          - name: report-nonresidents-family
+            template: spark-job
+            dependencies: [report-residents]
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_nonresidents_family"
+                - name: output_table
+                  value: "report_nonresidents_family"
+                - name: filter_field
+                  value: "has_nonresidents_family"
+
+          - name: report-nonresidents-outside
+            template: spark-job
+            dependencies: [report-residents]
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_nonresidents_outside"
+                - name: output_table
+                  value: "report_nonresidents_outside"
+                - name: filter_field
+                  value: "has_nonresidents_outside"
+
+          - name: report-authorized-capital
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_authorized_capital"
+                - name: output_table
+                  value: "report_authorized_capital"
+                - name: filter_field
+                  value: "has_finance_source_increase_authorized_capital_current_founder"
+
+          - name: report-raised-investors
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_raised_investors"
+                - name: output_table
+                  value: "report_raised_investors"
+                - name: filter_field
+                  value: "has_raised_investors_funds"
+
+          - name: report-borrowed-funds
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_borrowed_funds"
+                - name: output_table
+                  value: "report_borrowed_funds"
+                - name: filter_field
+                  value: "has_borrowed_funds"
+
+          - name: report-borrowed-international
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_borrowed_international"
+                - name: output_table
+                  value: "report_borrowed_international"
+                - name: filter_field
+                  value: "has_borrowed_funds_international"
+
+          - name: report-another-method
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_another_method"
+                - name: output_table
+                  value: "report_another_method"
+                - name: filter_field
+                  value: "has_another_method_investors_funds"
+
+          - name: report-debt-instruments
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_debt_instruments"
+                - name: output_table
+                  value: "report_debt_instruments"
+                - name: filter_field
+                  value: "has_debt_instruments"
+
+          - name: report-income-international-prev
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_income_international_prev"
+                - name: output_table
+                  value: "report_income_international_prev"
+                - name: filter_field
+                  value: "has_income_international_previous_quarter"
+
+          - name: report-income-international-curr
+            template: spark-job
+            arguments:
+              parameters:
+                - name: job_name
+                  value: "report_income_international_curr"
+                - name: output_table
+                  value: "report_income_international_curr"
+                - name: filter_field
+                  value: "has_income_international_current_quarter"
+
+          - name: notify-completion
+            template: notify
+            dependencies:
+              - reports-summary
+              - report-residents
+              - report-nonresidents
+              - report-nonresidents-family
+              - report-nonresidents-outside
+              - report-authorized-capital
+              - report-raised-investors
+              - report-borrowed-funds
+              - report-borrowed-international
+              - report-another-method
+              - report-debt-instruments
+              - report-income-international-prev
+              - report-income-international-curr
+
+    - name: spark-job
+      inputs:
+        parameters:
+          - name: job_name
+          - name: output_table
+          - name: filter_field
+            default: ""
+      container:
+        image: bitnami/spark:3.5
+        command: ["/opt/bitnami/spark/bin/spark-submit"]
+        args:
+          - "--master"
+          - "local[*]"
+          - "--name"
+          - "{{inputs.parameters.job_name}}"
+          - "--conf"
+          - "spark.driver.memory=4g"
+          - "--conf"
+          - "spark.jars.packages=io.trino:trino-jdbc:435"
+          - "/scripts/process_reports.py"
+          - "--year"
+          - "{{workflow.parameters.year}}"
+          - "--report_type"
+          - "{{workflow.parameters.report_type}}"
+          - "--job_name"
+          - "{{inputs.parameters.job_name}}"
+          - "--output_table"
+          - "{{inputs.parameters.output_table}}"
+          - "--filter_field"
+          - "{{inputs.parameters.filter_field}}"
+          - "--trino_host"
+          - "{{workflow.parameters.trino_host}}"
+          - "--trino_catalog"
+          - "{{workflow.parameters.trino_catalog}}"
+          - "--trino_schema"
+          - "{{workflow.parameters.trino_schema}}"
+          - "--output_schema"
+          - "{{workflow.parameters.output_schema}}"
+        volumeMounts:
+          - name: spark-scripts
+            mountPath: /scripts
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2"
+          limits:
+            memory: "8Gi"
+            cpu: "4"
+
+    - name: notify
+      container:
+        image: curlimages/curl:latest
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Reports generated successfully!"
+            echo "Year: {{workflow.parameters.year}}"
+            echo "Quarter: {{workflow.parameters.report_type}}"
+            echo "Output schema: {{workflow.parameters.output_schema}}"

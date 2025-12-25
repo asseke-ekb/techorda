@@ -1,0 +1,54 @@
+---
+# ConfigMap со Spark скриптами
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-scripts
+  namespace: argo
+data:
+  process_reports.py: |
+    # Содержимое скрипта process_reports.py
+    # Загружается отдельно через kubectl create configmap
+
+---
+# ConfigMap с SQL-запросами (опционально)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sql-queries
+  namespace: argo
+data:
+  base_query.sql: |
+    SELECT
+        r.id,
+        r.year,
+        r.status,
+        r.report_type,
+        r.data,
+        r.version,
+        r.signed_at,
+        sr.number,
+        sr.data as request_data,
+        c.name as company_name,
+        c.tin as company_tin,
+        json_extract_scalar(sr.data, '$.activation_info') as activation_info,
+        hf.data as hub_form_data
+    FROM service_report r
+    LEFT JOIN service_request sr ON r.service_request_id = sr.id
+    LEFT JOIN company c ON sr.company_id = c.id
+    LEFT JOIN hub_form hf ON sr.hub_form_id = hf.id
+    WHERE r.year = :year
+      AND r.status = 'signed'
+      AND r.report_type = :report_type
+
+---
+# Secret для подключения к Trino (если требуется аутентификация)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trino-credentials
+  namespace: argo
+type: Opaque
+stringData:
+  TRINO_USER: "admin"
+  TRINO_PASSWORD: ""
