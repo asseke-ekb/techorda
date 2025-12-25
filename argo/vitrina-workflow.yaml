@@ -1,0 +1,68 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: test-iceberg-read-
+  namespace: argo
+spec:
+  entrypoint: test-read
+
+  templates:
+    - name: test-read
+      container:
+        image: apache/spark:3.5.0
+        command:
+          - /bin/bash
+          - -c
+        args:
+          - |
+            /opt/spark/bin/spark-submit \
+              --master spark://spark-master-service.iceberg-spark.svc.cluster.local:7077 \
+              --deploy-mode client \
+              --conf spark.driver.host=$(hostname -i) \
+              --conf spark.driver.bindAddress=0.0.0.0 \
+              --conf spark.sql.catalog.iceberg=org.apache.iceberg.spark.SparkCatalog \
+              --conf spark.sql.catalog.iceberg.type=hive \
+              --conf spark.sql.catalog.iceberg.uri=thrift://hive-metastore-service.iceberg-spark.svc.cluster.local:9083 \
+              /dev/stdin <<'EOF'
+            from pyspark.sql import SparkSession
+
+            spark = SparkSession.builder.appName("test-read").getOrCreate()
+
+            print("=== SHOW DATABASES ===")
+            spark.sql("SHOW DATABASES").show()
+
+            print("=== SHOW TABLES IN bronze ===")
+            spark.sql("SHOW TABLES IN iceberg.bronze").show()
+
+            print("=== SELECT 5 rows ===")
+            spark.sql("""
+                SELECT id, year, report_type, status
+                FROM iceberg.bronze.service_report_cdc
+                LIMIT 5
+            """).show()
+
+            print("=== COUNT ===")
+            spark.sql("SELECT COUNT(*) FROM iceberg.bronze.service_report_cdc").show()
+
+            spark.stop()
+            EOF
+
+        env:
+          - name: MINIO_ROOT_USER
+            value: admin
+          - name: MINIO_ROOT_PASSWORD
+            value: 9xUwARJRU3TAYL4
+        volumeMounts:
+          - name: spark-defaults
+            mountPath: /opt/spark/conf/spark-defaults.conf
+            subPath: spark-defaults.conf
+          - name: hive-core-site
+            mountPath: /opt/spark/conf/core-site.xml
+            subPath: core-site.xml
+      volumes:
+        - name: spark-defaults
+          configMap:
+            name: spark-iceberg-config
+        - name: hive-core-site
+          configMap:
+            name: hive-core-site

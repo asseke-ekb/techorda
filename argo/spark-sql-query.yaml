@@ -1,0 +1,51 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: spark-sql-query-
+  namespace: argo
+spec:
+  entrypoint: run-query
+
+  templates:
+    - name: run-query
+      container:
+        image: apache/spark:3.5.0
+        command:
+          - /bin/bash
+          - -c
+        args:
+          - |
+            echo "=== Starting Spark SQL Query ==="
+
+            /opt/spark/bin/spark-sql \
+              --master spark://spark-master-service.iceberg-spark.svc.cluster.local:7077 \
+              --conf spark.driver.host=$(hostname -i) \
+              --conf spark.driver.bindAddress=0.0.0.0 \
+              -e "
+                SHOW DATABASES;
+                SHOW TABLES IN iceberg.bronze;
+                SELECT id, year, report_type, status FROM iceberg.bronze.service_report_cdc LIMIT 5;
+                SELECT COUNT(*) as total FROM iceberg.bronze.service_report_cdc;
+              "
+
+            echo "=== Done ==="
+
+        env:
+          - name: MINIO_ROOT_USER
+            value: admin
+          - name: MINIO_ROOT_PASSWORD
+            value: 9xUwARJRU3TAYL4
+        volumeMounts:
+          - name: spark-defaults
+            mountPath: /opt/spark/conf/spark-defaults.conf
+            subPath: spark-defaults.conf
+          - name: hive-core-site
+            mountPath: /opt/spark/conf/core-site.xml
+            subPath: core-site.xml
+      volumes:
+        - name: spark-defaults
+          configMap:
+            name: spark-iceberg-config
+        - name: hive-core-site
+          configMap:
+            name: hive-core-site

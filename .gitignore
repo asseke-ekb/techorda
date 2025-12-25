@@ -26,3 +26,13 @@ Thumbs.db
 # Temp
 *.tmp
 *.log
+
+# JDK / Java
+jdk*/
+jdk-*/
+
+# CSV exports (generated data)
+*.csv
+
+# JDBC drivers
+*.jar
