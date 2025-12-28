@@ -36,7 +36,8 @@ def fetch_deduped_data():
     import jaydebeapi
     import pandas as pd
 
-    # SQL с ROW_NUMBER() для дедупликации
+    # SQL с ROW_NUMBER() для дедупликации + учёт CDC операций (op)
+    # op='c' - create, op='u' - update, op='d' - delete
     query = """
     WITH ranked AS (
         SELECT
@@ -54,6 +55,7 @@ def fetch_deduped_data():
         report_type,
         status,
         version,
+        op,
         created_at,
         updated_at,
         signed_at,
@@ -61,6 +63,7 @@ def fetch_deduped_data():
         data
     FROM ranked
     WHERE rn = 1
+      AND op != 'd'  -- исключаем удалённые записи
     ORDER BY year DESC, report_type, id DESC
     """
 

@@ -38,6 +38,7 @@
 
 - Хранит **все** записи из CDC (Change Data Capture)
 - JSON остаётся в колонке `data` как есть
+- **Дедупликация уже настроена** при загрузке по полям `id` и `updated_ts`
 
 ### 1.2 Структура таблицы
 
@@ -47,6 +48,7 @@
 | year               | INT       | Год отчёта                                  |
 | report_type        | STRING    | Тип: quarter1, quarter2, quarter3, quarter4, yearly |
 | status             | STRING    | Статус: draft, signed, rejected             |
+| **op**             | **STRING**| **CDC операция: c=create, u=update, d=delete** |
 | signed_at          | TIMESTAMP | Дата подписания                             |
 | version            | STRING    | Версия отчёта                               |
 | created_at         | TIMESTAMP | Дата создания                               |
@@ -65,16 +67,23 @@
 - **Парсинг JSON**: извлечение полей из `data`
 - **Типизация**: приведение к правильным типам (BIGINT, STRING)
 
-### 2.2 Логика дедупликации
+### 2.2 Логика дедупликации + учёт CDC операций
 
 ```sql
+-- 1. Дедупликация: последняя версия по updated_at
 ROW_NUMBER() OVER (
     PARTITION BY service_request_id, year, report_type, status
     ORDER BY updated_at DESC
 ) AS rn
 ...
 WHERE rn = 1
+  AND op != 'd'  -- 2. Исключаем удалённые записи (op='d')
 ```
+
+**CDC операции (поле `op`):**
+- `c` = create (создание)
+- `u` = update (обновление)
+- `d` = delete (удаление) — **исключаем из витрины**
 
 ### 2.3 SQL для Silver (Preview)
 
@@ -86,6 +95,7 @@ WITH ranked AS (
         r.year,
         r.report_type,
         r.status,
+        r.op,  -- CDC операция
         r.version,
         r.created_at,
         r.updated_at,
@@ -153,6 +163,7 @@ WITH ranked AS (
 SELECT *
 FROM ranked
 WHERE rn = 1
+  AND op != 'd'  -- исключаем удалённые записи
 ORDER BY service_request_id, year, report_type, status;
 ```
 
@@ -192,6 +203,7 @@ WITH silver_preview AS (
                 year,
                 report_type,
                 status,
+                op,  -- CDC операция
                 updated_at,
 
                 CAST(get_json_object(data, '$.residents_count') AS BIGINT)    AS residents_count,
@@ -228,6 +240,7 @@ WITH silver_preview AS (
         ) r
     ) t
     WHERE rn = 1
+      AND op != 'd'  -- исключаем удалённые записи
 ),
 
 signed_quarters AS (

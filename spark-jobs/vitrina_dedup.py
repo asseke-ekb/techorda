@@ -49,10 +49,13 @@ def read_reports(spark: SparkSession):
 
 def build_vitrina_with_dedup(df):
     """
-    Строит витрину с дедупликацией.
+    Строит витрину с дедупликацией и учётом CDC операций.
 
-    Использует ROW_NUMBER() для выбора последней версии отчёта
-    по каждой комбинации (service_request_id, report_type, year).
+    Логика:
+    1. Берём последнюю версию записи по (service_request_id, report_type, year)
+       используя ROW_NUMBER() ORDER BY updated_at DESC
+    2. Исключаем записи с op='d' (удалённые)
+    3. Оставляем только op='c' (create) или op='u' (update)
     """
 
     # Окно для дедупликации: последняя версия по updated_at
@@ -63,8 +66,12 @@ def build_vitrina_with_dedup(df):
     # Добавляем номер строки
     ranked = df.withColumn("rn", F.row_number().over(window_spec))
 
-    # Фильтруем только первую (последнюю по времени) запись
-    deduped = ranked.filter(F.col("rn") == 1)
+    # Фильтруем: только первую (последнюю по времени) запись
+    # и исключаем удалённые записи (op='d')
+    deduped = ranked.filter(
+        (F.col("rn") == 1) &
+        (F.col("op") != "d")  # исключаем DELETE операции
+    )
 
     # Строим витрину
     vitrina = deduped.select(
