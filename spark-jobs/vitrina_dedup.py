@@ -44,7 +44,9 @@ def create_spark_session(app_name: str = "vitrina-dedup") -> SparkSession:
 
 def read_reports(spark: SparkSession):
     """Читает отчёты из bronze.service_report_cdc."""
-    return spark.table("iceberg.bronze.service_report_cdc")
+    df = spark.table("iceberg.bronze.service_report_cdc")
+    # ВАЖНО: Исключаем удалённые записи (op != 'd') - замечание от Дмитрия
+    return df.filter(F.col("op") != "d")
 
 
 def build_vitrina_with_dedup(df):

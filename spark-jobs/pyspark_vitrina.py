@@ -55,7 +55,8 @@ def fetch_data_jdbc(year: int = None, report_type: str = None, limit: int = None
     import pandas as pd
 
     # Строим WHERE
-    where_clauses = ["status = 'signed'"]
+    # ВАЖНО: Исключаем удалённые записи (op != 'd') - замечание от Дмитрия
+    where_clauses = ["status = 'signed'", "op != 'd'"]
     if year:
         where_clauses.append(f"year = {year}")
     else:
@@ -69,7 +70,7 @@ def fetch_data_jdbc(year: int = None, report_type: str = None, limit: int = None
     query = f"""
     SELECT
         id, year, report_type, status, signed_at, version,
-        created_at, updated_at, service_request_id, author_id, data
+        created_at, updated_at, service_request_id, author_id, op, data
     FROM service_report_cdc
     WHERE {where_sql}
     ORDER BY year DESC, report_type, id DESC

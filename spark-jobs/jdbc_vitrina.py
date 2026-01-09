@@ -90,7 +90,8 @@ def test_select():
 
 def build_vitrina_query(year: int = None, report_type: str = None, limit: int = 1000) -> str:
     """SQL запрос для витрины."""
-    where_clauses = ["status = 'signed'"]
+    # ВАЖНО: Исключаем удалённые записи (op != 'd') - замечание от Дмитрия
+    where_clauses = ["status = 'signed'", "op != 'd'"]
 
     if year:
         where_clauses.append(f"year = {year}")

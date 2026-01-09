@@ -59,6 +59,9 @@ def read_reports_from_iceberg(spark: SparkSession, year: int = None, report_type
     """
     df = spark.table("iceberg.bronze.service_report_cdc")
 
+    # ВАЖНО: Исключаем удалённые записи (op != 'd') - замечание от Дмитрия
+    df = df.filter(F.col("op") != "d")
+
     # Базовый фильтр - только подписанные отчёты
     df = df.filter(F.col("status") == "signed")
 

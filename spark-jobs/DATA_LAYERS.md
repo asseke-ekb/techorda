@@ -38,7 +38,7 @@
 
 - Хранит **все** записи из CDC (Change Data Capture)
 - JSON остаётся в колонке `data` как есть
-- **Дедупликация уже настроена** при загрузке по полям `id` и `updated_ts`
+- **Дедупликация настроена при загрузке** по полям `id` и `updated_ts`
 
 ### 1.2 Структура таблицы
 
@@ -48,14 +48,24 @@
 | year               | INT       | Год отчёта                                  |
 | report_type        | STRING    | Тип: quarter1, quarter2, quarter3, quarter4, yearly |
 | status             | STRING    | Статус: draft, signed, rejected             |
-| **op**             | **STRING**| **CDC операция: c=create, u=update, d=delete** |
 | signed_at          | TIMESTAMP | Дата подписания                             |
 | version            | STRING    | Версия отчёта                               |
 | created_at         | TIMESTAMP | Дата создания                               |
 | updated_at         | TIMESTAMP | Дата обновления                             |
 | service_request_id | INT       | ID заявки                                   |
 | author_id          | INT       | ID автора                                   |
+| **op**             | **STRING** | **Операция CDC: c (create), u (update), d (delete)** |
 | **data**           | **STRING (JSON)** | **JSON с данными отчёта**          |
+
+### 1.3 Поле `op` — Операции CDC
+
+| Значение | Операция | Описание |
+|----------|----------|----------|
+| `c`      | CREATE   | Новая запись добавлена |
+| `u`      | UPDATE   | Запись изменена |
+| `d`      | DELETE   | Запись удалена |
+
+> **Важно:** При формировании Silver/Gold слоёв необходимо фильтровать `WHERE op != 'd'` для исключения удалённых записей.
 
 ---
 
@@ -63,107 +73,97 @@
 
 ### 2.1 Назначение
 
-- **Дедупликация**: выбор последней версии по `(service_request_id, year, report_type, status)`
+- **Фильтрация удалённых записей**: исключаем `op = 'd'`
 - **Парсинг JSON**: извлечение полей из `data`
 - **Типизация**: приведение к правильным типам (BIGINT, STRING)
 
-### 2.2 Логика дедупликации + учёт CDC операций
+> **Примечание:** Дедупликация уже выполнена в Bronze по `id` + `updated_ts`
+
+### 2.2 Логика обработки CDC
+
+> **Важно:** Дедупликация по `id` и `updated_ts` уже настроена при загрузке в Bronze.
+> В Silver нужно учитывать поле `op` (операция CDC):
+> - `c` (create) — добавление записи
+> - `u` (update) — модификация записи
+> - `d` (delete) — удаление записи
 
 ```sql
--- 1. Дедупликация: последняя версия по updated_at
-ROW_NUMBER() OVER (
-    PARTITION BY service_request_id, year, report_type, status
-    ORDER BY updated_at DESC
-) AS rn
-...
-WHERE rn = 1
-  AND op != 'd'  -- 2. Исключаем удалённые записи (op='d')
+-- Исключаем удалённые записи (op = 'd')
+WHERE op != 'd'
 ```
-
-**CDC операции (поле `op`):**
-- `c` = create (создание)
-- `u` = update (обновление)
-- `d` = delete (удаление) — **исключаем из витрины**
 
 ### 2.3 SQL для Silver (Preview)
 
+> **Примечание:** Дедупликация уже выполнена в Bronze по `id` + `updated_ts`.
+> Здесь только фильтруем удалённые записи и парсим JSON.
+
 ```sql
-WITH ranked AS (
-    SELECT
-        r.id AS report_id,
-        r.service_request_id,
-        r.year,
-        r.report_type,
-        r.status,
-        r.op,  -- CDC операция
-        r.version,
-        r.created_at,
-        r.updated_at,
-        r.signed_at,
-        r.author_id,
+SELECT
+    r.id AS report_id,
+    r.service_request_id,
+    r.year,
+    r.report_type,
+    r.status,
+    r.version,
+    r.created_at,
+    r.updated_at,
+    r.signed_at,
+    r.author_id,
+    r.op AS cdc_operation,  -- Сохраняем операцию CDC для аудита
 
-        -- Компания / идентификаторы
-        get_json_object(r.data, '$.company_tin')  AS company_tin,
-        get_json_object(r.data, '$.company_name') AS company_name,
-        CAST(get_json_object(r.data, '$.certificate_number') AS STRING) AS certificate_number,
-        CAST(get_json_object(r.data, '$.oked') AS STRING) AS oked,
+    -- Компания / идентификаторы
+    get_json_object(r.data, '$.company_tin')  AS company_tin,
+    get_json_object(r.data, '$.company_name') AS company_name,
+    CAST(get_json_object(r.data, '$.certificate_number') AS STRING) AS certificate_number,
+    CAST(get_json_object(r.data, '$.oked') AS STRING) AS oked,
 
-        -- Сотрудники
-        CAST(get_json_object(r.data, '$.residents_count') AS BIGINT)    AS residents_count,
-        CAST(get_json_object(r.data, '$.nonresidents_count') AS BIGINT) AS nonresidents_count,
-        CAST(get_json_object(r.data, '$.gph_count') AS BIGINT)          AS gph_count,
+    -- Сотрудники
+    CAST(get_json_object(r.data, '$.residents_count') AS BIGINT)    AS residents_count,
+    CAST(get_json_object(r.data, '$.nonresidents_count') AS BIGINT) AS nonresidents_count,
+    CAST(get_json_object(r.data, '$.gph_count') AS BIGINT)          AS gph_count,
 
-        -- Доходы
-        CAST(get_json_object(r.data, '$.income_total') AS BIGINT)         AS income_total,
-        CAST(get_json_object(r.data, '$.income_international') AS BIGINT) AS income_international,
-        CAST(get_json_object(r.data, '$.income_total_previous_quarter') AS BIGINT) AS income_total_previous_quarter,
-        CAST(get_json_object(r.data, '$.income_total_current_quarter') AS BIGINT)  AS income_total_current_quarter,
+    -- Доходы
+    CAST(get_json_object(r.data, '$.income_total') AS BIGINT)         AS income_total,
+    CAST(get_json_object(r.data, '$.income_international') AS BIGINT) AS income_international,
+    CAST(get_json_object(r.data, '$.income_total_previous_quarter') AS BIGINT) AS income_total_previous_quarter,
+    CAST(get_json_object(r.data, '$.income_total_current_quarter') AS BIGINT)  AS income_total_current_quarter,
 
-        -- Финансирование / инвестиции
-        CAST(get_json_object(r.data, '$.finance_source_increase_authorized_capital') AS BIGINT)
-            AS finance_source_increase_authorized_capital,
-        CAST(get_json_object(r.data, '$.main_capital_investments') AS BIGINT)
-            AS main_capital_investments,
-        CAST(get_json_object(r.data, '$.main_tangible_capital_investments') AS BIGINT)
-            AS main_tangible_capital_investments,
-        CAST(get_json_object(r.data, '$.main_intangible_capital_investments') AS BIGINT)
-            AS main_intangible_capital_investments,
+    -- Финансирование / инвестиции
+    CAST(get_json_object(r.data, '$.finance_source_increase_authorized_capital') AS BIGINT)
+        AS finance_source_increase_authorized_capital,
+    CAST(get_json_object(r.data, '$.main_capital_investments') AS BIGINT)
+        AS main_capital_investments,
+    CAST(get_json_object(r.data, '$.main_tangible_capital_investments') AS BIGINT)
+        AS main_tangible_capital_investments,
+    CAST(get_json_object(r.data, '$.main_intangible_capital_investments') AS BIGINT)
+        AS main_intangible_capital_investments,
 
-        CAST(get_json_object(r.data, '$.finance_source_loan') AS BIGINT)
-            AS finance_source_loan,
-        CAST(get_json_object(r.data, '$.finance_source_loan_foreign') AS BIGINT)
-            AS finance_source_loan_foreign,
-        CAST(get_json_object(r.data, '$.finance_source_government') AS BIGINT)
-            AS finance_source_government,
-        CAST(get_json_object(r.data, '$.finance_source_investment') AS BIGINT)
-            AS finance_source_investment,
+    CAST(get_json_object(r.data, '$.finance_source_loan') AS BIGINT)
+        AS finance_source_loan,
+    CAST(get_json_object(r.data, '$.finance_source_loan_foreign') AS BIGINT)
+        AS finance_source_loan_foreign,
+    CAST(get_json_object(r.data, '$.finance_source_government') AS BIGINT)
+        AS finance_source_government,
+    CAST(get_json_object(r.data, '$.finance_source_investment') AS BIGINT)
+        AS finance_source_investment,
 
-        CAST(get_json_object(r.data, '$.investor_amount') AS BIGINT)
-            AS investor_amount,
-        get_json_object(r.data, '$.investor_country_company')
-            AS investor_country_company,
+    CAST(get_json_object(r.data, '$.investor_amount') AS BIGINT)
+        AS investor_amount,
+    get_json_object(r.data, '$.investor_country_company')
+        AS investor_country_company,
 
-        -- Налоги / льготы
-        CAST(get_json_object(r.data, '$.tax_incentives') AS BIGINT)     AS tax_incentives,
-        CAST(get_json_object(r.data, '$.tax_incentives_kpn') AS BIGINT) AS tax_incentives_kpn,
-        CAST(get_json_object(r.data, '$.tax_incentives_nds') AS BIGINT) AS tax_incentives_nds,
-        CAST(get_json_object(r.data, '$.tax_incentives_ipn') AS BIGINT) AS tax_incentives_ipn,
-        CAST(get_json_object(r.data, '$.tax_incentives_sn') AS BIGINT)  AS tax_incentives_sn,
+    -- Налоги / льготы
+    CAST(get_json_object(r.data, '$.tax_incentives') AS BIGINT)     AS tax_incentives,
+    CAST(get_json_object(r.data, '$.tax_incentives_kpn') AS BIGINT) AS tax_incentives_kpn,
+    CAST(get_json_object(r.data, '$.tax_incentives_nds') AS BIGINT) AS tax_incentives_nds,
+    CAST(get_json_object(r.data, '$.tax_incentives_ipn') AS BIGINT) AS tax_incentives_ipn,
+    CAST(get_json_object(r.data, '$.tax_incentives_sn') AS BIGINT)  AS tax_incentives_sn,
 
-        -- Подстраховка под Excel (если ключ существует)
-        CAST(get_json_object(r.data, '$.total_tax_saved') AS BIGINT)    AS total_tax_saved,
+    -- Подстраховка под Excel (если ключ существует)
+    CAST(get_json_object(r.data, '$.total_tax_saved') AS BIGINT)    AS total_tax_saved
 
-        ROW_NUMBER() OVER (
-            PARTITION BY r.service_request_id, r.year, r.report_type, r.status
-            ORDER BY r.updated_at DESC
-        ) AS rn
-
-    FROM bronze.service_report_cdc r
-)
-SELECT *
-FROM ranked
-WHERE rn = 1
-  AND op != 'd'  -- исключаем удалённые записи
+FROM iceberg.bronze.service_report_cdc r
+WHERE r.op != 'd'  -- Исключаем удалённые записи
 ORDER BY service_request_id, year, report_type, status;
 ```
 
@@ -187,65 +187,57 @@ Gold хранит **годовой свод** на уровне заявки/к�
 
 ### 3.3 SQL для Gold (Preview)
 
+> **Примечание:** Дедупликация уже выполнена в Bronze.
+> Здесь фильтруем по `op != 'd'`, `status = 'signed'` и агрегируем.
+
 ```sql
-WITH silver_preview AS (
-    SELECT *
-    FROM (
-        SELECT
-            r.*,
-            ROW_NUMBER() OVER (
-                PARTITION BY r.service_request_id, r.year, r.report_type, r.status
-                ORDER BY r.updated_at DESC
-            ) AS rn
-        FROM (
-            SELECT
-                service_request_id,
-                year,
-                report_type,
-                status,
-                op,  -- CDC операция
-                updated_at,
+WITH silver_data AS (
+    -- Парсим JSON и фильтруем удалённые записи
+    SELECT
+        service_request_id,
+        year,
+        report_type,
+        status,
+        op,
 
-                CAST(get_json_object(data, '$.residents_count') AS BIGINT)    AS residents_count,
-                CAST(get_json_object(data, '$.nonresidents_count') AS BIGINT) AS nonresidents_count,
+        CAST(get_json_object(data, '$.residents_count') AS BIGINT)    AS residents_count,
+        CAST(get_json_object(data, '$.nonresidents_count') AS BIGINT) AS nonresidents_count,
 
-                CAST(get_json_object(data, '$.income_total') AS BIGINT)         AS income_total,
-                CAST(get_json_object(data, '$.income_international') AS BIGINT) AS income_international,
+        CAST(get_json_object(data, '$.income_total') AS BIGINT)         AS income_total,
+        CAST(get_json_object(data, '$.income_international') AS BIGINT) AS income_international,
 
-                CAST(get_json_object(data, '$.finance_source_increase_authorized_capital') AS BIGINT)
-                    AS finance_source_increase_authorized_capital,
-                CAST(get_json_object(data, '$.main_capital_investments') AS BIGINT)
-                    AS main_capital_investments,
-                CAST(get_json_object(data, '$.finance_source_loan') AS BIGINT)
-                    AS finance_source_loan,
-                CAST(get_json_object(data, '$.finance_source_loan_foreign') AS BIGINT)
-                    AS finance_source_loan_foreign,
-                CAST(get_json_object(data, '$.finance_source_government') AS BIGINT)
-                    AS finance_source_government,
-                CAST(get_json_object(data, '$.finance_source_investment') AS BIGINT)
-                    AS finance_source_investment,
+        CAST(get_json_object(data, '$.finance_source_increase_authorized_capital') AS BIGINT)
+            AS finance_source_increase_authorized_capital,
+        CAST(get_json_object(data, '$.main_capital_investments') AS BIGINT)
+            AS main_capital_investments,
+        CAST(get_json_object(data, '$.finance_source_loan') AS BIGINT)
+            AS finance_source_loan,
+        CAST(get_json_object(data, '$.finance_source_loan_foreign') AS BIGINT)
+            AS finance_source_loan_foreign,
+        CAST(get_json_object(data, '$.finance_source_government') AS BIGINT)
+            AS finance_source_government,
+        CAST(get_json_object(data, '$.finance_source_investment') AS BIGINT)
+            AS finance_source_investment,
 
-                CAST(get_json_object(data, '$.investor_amount') AS BIGINT)
-                    AS investor_amount,
+        CAST(get_json_object(data, '$.investor_amount') AS BIGINT)
+            AS investor_amount,
 
-                CAST(get_json_object(data, '$.tax_incentives') AS BIGINT)     AS tax_incentives,
-                CAST(get_json_object(data, '$.tax_incentives_kpn') AS BIGINT) AS tax_incentives_kpn,
-                CAST(get_json_object(data, '$.tax_incentives_nds') AS BIGINT) AS tax_incentives_nds,
-                CAST(get_json_object(data, '$.tax_incentives_ipn') AS BIGINT) AS tax_incentives_ipn,
-                CAST(get_json_object(data, '$.tax_incentives_sn') AS BIGINT)  AS tax_incentives_sn,
+        CAST(get_json_object(data, '$.tax_incentives') AS BIGINT)     AS tax_incentives,
+        CAST(get_json_object(data, '$.tax_incentives_kpn') AS BIGINT) AS tax_incentives_kpn,
+        CAST(get_json_object(data, '$.tax_incentives_nds') AS BIGINT) AS tax_incentives_nds,
+        CAST(get_json_object(data, '$.tax_incentives_ipn') AS BIGINT) AS tax_incentives_ipn,
+        CAST(get_json_object(data, '$.tax_incentives_sn') AS BIGINT)  AS tax_incentives_sn,
 
-                CAST(get_json_object(data, '$.total_tax_saved') AS BIGINT)    AS total_tax_saved
+        CAST(get_json_object(data, '$.total_tax_saved') AS BIGINT)    AS total_tax_saved
 
-            FROM bronze.service_report_cdc
-        ) r
-    ) t
-    WHERE rn = 1
-      AND op != 'd'  -- исключаем удалённые записи
+    FROM iceberg.bronze.service_report_cdc
+    WHERE op != 'd'  -- Исключаем удалённые записи
 ),
 
 signed_quarters AS (
+    -- Фильтруем только подписанные квартальные отчёты
     SELECT *
-    FROM silver_preview
+    FROM silver_data
     WHERE status = 'signed'
       AND report_type IN ('quarter1', 'quarter2', 'quarter3', 'quarter4')
 )
