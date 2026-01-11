@@ -49,30 +49,43 @@ def apply_dedup_logic(df):
             F.get_json_object("data", "$.nonresidents_count").cast(LongType()).alias("nonresidents_count"),
             F.get_json_object("data", "$.gph_count").cast(LongType()).alias("gph_count"),
 
+            # Доходы
             F.get_json_object("data", "$.income_total").cast(LongType()).alias("income_total"),
             F.get_json_object("data", "$.income_international").cast(LongType()).alias("income_international"),
+            F.get_json_object("data", "$.income_total_current_quarter").cast(LongType()).alias("income_total_current_quarter"),
+            F.get_json_object("data", "$.income_total_previous_quarter").cast(LongType()).alias("income_total_previous_quarter"),
 
-            F.get_json_object("data", "$.finance_source_increase_authorized_capital")
-                .cast(LongType()).alias("finance_source_increase_authorized_capital"),
-            F.get_json_object("data", "$.main_capital_investments")
-                .cast(LongType()).alias("main_capital_investments"),
-            F.get_json_object("data", "$.finance_source_loan")
-                .cast(LongType()).alias("finance_source_loan"),
-            F.get_json_object("data", "$.finance_source_loan_foreign")
-                .cast(LongType()).alias("finance_source_loan_foreign"),
-            F.get_json_object("data", "$.finance_source_government")
-                .cast(LongType()).alias("finance_source_government"),
-            F.get_json_object("data", "$.finance_source_investment")
-                .cast(LongType()).alias("finance_source_investment"),
+            # Экспорт по странам (JSON массив)
+            F.get_json_object("data", "$.income_international_current_quarter").alias("income_international_current_quarter"),
+            F.get_json_object("data", "$.income_international_previous_quarter").alias("income_international_previous_quarter"),
 
+            # Инвестиции
+            F.get_json_object("data", "$.investments_total_current_quarter").cast(LongType()).alias("investments_total_current_quarter"),
+            F.get_json_object("data", "$.finance_source_increase_authorized_capital").cast(LongType()).alias("finance_source_increase_authorized_capital"),
+            F.get_json_object("data", "$.main_capital_investments").cast(LongType()).alias("main_capital_investments"),
+            F.get_json_object("data", "$.main_tangible_capital_investments").cast(LongType()).alias("main_tangible_capital_investments"),
+            F.get_json_object("data", "$.main_intangible_capital_investments").cast(LongType()).alias("main_intangible_capital_investments"),
+
+            # Займы и финансирование
+            F.get_json_object("data", "$.finance_source_loan").cast(LongType()).alias("finance_source_loan"),
+            F.get_json_object("data", "$.finance_source_loan_foreign").cast(LongType()).alias("finance_source_loan_foreign"),
+            F.get_json_object("data", "$.government_support_measures").cast(LongType()).alias("government_support_measures"),
+            F.get_json_object("data", "$.finance_source_investment").cast(LongType()).alias("finance_source_investment"),
+
+            # Инвесторы
             F.get_json_object("data", "$.investor_amount").cast(LongType()).alias("investor_amount"),
             F.get_json_object("data", "$.investor_country_company").alias("investor_country_company"),
 
+            # Налоговые льготы
             F.get_json_object("data", "$.tax_incentives").cast(LongType()).alias("tax_incentives"),
             F.get_json_object("data", "$.tax_incentives_kpn").cast(LongType()).alias("tax_incentives_kpn"),
             F.get_json_object("data", "$.tax_incentives_nds").cast(LongType()).alias("tax_incentives_nds"),
             F.get_json_object("data", "$.tax_incentives_ipn").cast(LongType()).alias("tax_incentives_ipn"),
             F.get_json_object("data", "$.tax_incentives_sn").cast(LongType()).alias("tax_incentives_sn"),
+            F.get_json_object("data", "$.total_tax_saved").cast(LongType()).alias("total_tax_saved"),
+
+            # Сбор 1%
+            F.get_json_object("data", "$.collection_amount").cast(LongType()).alias("collection_amount"),
 
             F.current_timestamp().alias("etl_loaded_at"),
         )

@@ -377,30 +377,38 @@ CREATE TABLE IF NOT EXISTS iceberg.silver.service_report (
     gph_count BIGINT COMMENT 'Количество по ГПХ',
 
     -- Доходы
-    income_total BIGINT COMMENT 'Общий доход',
-    income_international BIGINT COMMENT 'Международный доход (экспорт)',
-    income_total_previous_quarter BIGINT COMMENT 'Доход за прошлый квартал',
+    income_total BIGINT COMMENT 'Общий доход (накопительно)',
+    income_international BIGINT COMMENT 'Международный доход/экспорт (накопительно)',
     income_total_current_quarter BIGINT COMMENT 'Доход за текущий квартал',
+    income_total_previous_quarter BIGINT COMMENT 'Доход за прошлый квартал',
 
-    -- Финансирование / инвестиции
-    finance_source_increase_authorized_capital BIGINT COMMENT 'Увеличение уставного капитала',
-    main_capital_investments BIGINT COMMENT 'Основные капитальные инвестиции',
-    main_tangible_capital_investments BIGINT COMMENT 'Материальные капитальные инвестиции',
-    main_intangible_capital_investments BIGINT COMMENT 'Нематериальные капитальные инвестиции',
-    finance_source_loan BIGINT COMMENT 'Займы',
-    finance_source_loan_foreign BIGINT COMMENT 'Иностранные займы',
-    finance_source_government BIGINT COMMENT 'Господдержка',
-    finance_source_investment BIGINT COMMENT 'Инвестиционное финансирование',
+    -- Инвестиции
+    investments_total_current_quarter BIGINT COMMENT 'Всего инвестиций за квартал (total_funding)',
+    finance_source_increase_authorized_capital BIGINT COMMENT 'Вклад в уставной капитал',
+    main_capital_investments BIGINT COMMENT 'Инвестиции в основной капитал',
+    main_tangible_capital_investments BIGINT COMMENT 'Инвестиции в материальный капитал',
+    main_intangible_capital_investments BIGINT COMMENT 'Инвестиции в нематериальный капитал',
+
+    -- Займы и финансирование
+    finance_source_loan BIGINT COMMENT 'Заемные средства',
+    finance_source_loan_foreign BIGINT COMMENT 'Иные инвестиции',
+    government_support_measures BIGINT COMMENT 'Господдержка (ГОСПОДДЕРЖКА в Power BI)',
+    finance_source_investment BIGINT COMMENT 'Привлеченные инвестиции',
+
+    -- Инвесторы
     investor_amount BIGINT COMMENT 'Сумма от инвесторов',
-    investor_country_company STRING COMMENT 'Страна инвестора',
+    investor_country_company STRING COMMENT 'Страна/компания инвестора',
 
-    -- Налоги / льготы
+    -- Налоговые льготы
     tax_incentives BIGINT COMMENT 'Налоговые льготы (всего)',
-    tax_incentives_kpn BIGINT COMMENT 'Льготы КПН',
-    tax_incentives_nds BIGINT COMMENT 'Льготы НДС',
-    tax_incentives_ipn BIGINT COMMENT 'Льготы ИПН',
-    tax_incentives_sn BIGINT COMMENT 'Льготы СН',
-    total_tax_saved BIGINT COMMENT 'Всего сэкономлено на налогах',
+    tax_incentives_kpn BIGINT COMMENT 'КПН',
+    tax_incentives_nds BIGINT COMMENT 'НДС',
+    tax_incentives_ipn BIGINT COMMENT 'ИПН',
+    tax_incentives_sn BIGINT COMMENT 'СН',
+    total_tax_saved BIGINT COMMENT 'Всего сэкономлено (TAXES в Power BI)',
+
+    -- Сбор
+    collection_amount BIGINT COMMENT 'Сумма сбора 1%',
 
     -- ETL
     etl_loaded_at TIMESTAMP COMMENT 'Дата загрузки ETL'
